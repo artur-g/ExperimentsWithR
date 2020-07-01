@@ -1,3 +1,4 @@
+library(sqldf)
 #Load data
 # Ok, another place where file Encoding can break data import/export made on Linux/Win/Mac
 # BE AWARE, Make standards
@@ -29,15 +30,15 @@ sqldf('SELECT count( DISTINCT order_id), count(order_id) FROM sentOrders')
 ordersClean <- sqldf('SELECT * FROM orders GROUP BY order_id') 
 
 #Questions
-print("1)	W jakim dniu roku klienci złożyli najwięcej zamówień?")
+print("1)    W jakim dniu roku klienci złożyli najwięcej zamówień?")
 sqldf('SELECT count(order_date) as orders_count, order_date FROM ordersClean GROUP BY order_date ORDER BY orders_count DESC LIMIT 1')
 
 
-print("2)	Ilu klientów skorzystało z kuponu rabatowego w trakcie zakupów?")
+print("2)    Ilu klientów skorzystało z kuponu rabatowego w trakcie zakupów?")
 sqldf('SELECT count(client_id) FROM ordersClean WHERE couponPercentage > 0')
 
 
-print("3)	Ilu klientów zrobiło w analizowanym okresie więcej niż jedno zamówienie?")
+print("3)    Ilu klientów zrobiło w analizowanym okresie więcej niż jedno zamówienie?")
 #This will return false positives because data is "DIRTY"
 sqldf('SELECT count(*) FROM (SELECT count(client_id) FROM orders  GROUP BY client_id HAVING count(client_id) > 1)')
 #This will accommodate for dirty data
@@ -47,7 +48,7 @@ sqldf('SELECT count(*) FROM (SELECT count(client_id), client_id FROM
 sqldf('SELECT count(*) FROM (SELECT count(client_id) FROM ordersClean GROUP BY client_id HAVING count(client_id) > 1)')
 
 
-print("4)	Który z produktów cieszył się największym powodzeniem? Ilu klientów kupiło go ze zniżką?")
+print("4)    Który z produktów cieszył się największym powodzeniem? Ilu klientów kupiło go ze zniżką?")
 #UNPIVOT is too complex. Let use UNION
 itemsInOrders <-  sqldf('SELECT order_id, item_id_1 as item_id FROM sentOrders 
                          UNION SELECT order_id, item_id_2 FROM sentOrders WHERE item_id_2 > 0 
@@ -61,7 +62,7 @@ sqldf('SELECT mostBought.item_id, timesBought, count(couponPercentage) as bought
       WHERE mostBought.item_id == itemsInOrders.item_id AND itemsInOrders.order_id == ordersClean.order_id')
 
 
-print("5)	Który produkt był najczęściej kupowany ze zniżką?")
+print("5)    Który produkt był najczęściej kupowany ze zniżką?")
 sqldf('SELECT  count(itemsInOrders.item_id) as boughtWithCoupon, itemsInOrders.item_id from itemsInOrders 
       JOIN ordersClean ON itemsInOrders.order_id == ordersClean.order_id
       where ordersClean.couponPercentage >0 
@@ -70,7 +71,7 @@ sqldf('SELECT  count(itemsInOrders.item_id) as boughtWithCoupon, itemsInOrders.i
       ')
 
 
-print("6)	Jaka była końcowa wartość wszystkich zamówień w badanym okresie?")
+print("6)    Jaka była końcowa wartość wszystkich zamówień w badanym okresie?")
 #We DONT KNOW value of "SALE" (wyprzedaż) so this is estimate
 sqldf('SELECT  total(basePrice.base_price - (basePrice.base_price * (CAST(IFNULL(ordersClean.couponPercentage, 0) AS float)/100))) 
       as TotalValueOfAllOrders
