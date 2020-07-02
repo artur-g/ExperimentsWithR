@@ -1,4 +1,9 @@
+install.packages("sqldf")
+install.packages("dplyr")
+install.packages("reshape")
 library(sqldf)
+library(dplyr)
+library(reshape)
 #Load data
 # Ok, another place where file Encoding can break data import/export made on Linux/Win/Mac
 # BE AWARE, Make standards
@@ -9,7 +14,7 @@ prediction <- read.csv("Data/predykcja.csv", header = TRUE, sep = ";", fileEncod
 sentOrders <- read.csv("Data/wyslane.csv", header = TRUE, sep = ";", fileEncoding = "UTF-8-BOM")
 orders <- read.csv("Data/zamowienia.csv", header = TRUE, sep = ";", fileEncoding = "UTF-8-BOM")
 
-#Clean data
+#Format data types
 prediction$DATA <- as.Date(prediction$DATA,format="%d.%m.%Y")
 prediction <- prediction[rowSums(is.na(prediction)) != ncol(prediction),]
 prediction$wyprzedaż <- (!is.na(as.integer(prediction$wyprzedaż)) & as.integer(prediction$wyprzedaż) > 0)
@@ -33,9 +38,13 @@ ordersClean <- sqldf('SELECT * FROM orders GROUP BY order_id')
 print("1)    W jakim dniu roku klienci złożyli najwięcej zamówień?")
 sqldf('SELECT count(order_date) as orders_count, order_date FROM ordersClean GROUP BY order_date ORDER BY orders_count DESC LIMIT 1')
 
+ordersClean %>% group_by(order_date) %>% count(order_date) %>% arrange(desc(n)) %>% head(1)
+
 
 print("2)    Ilu klientów skorzystało z kuponu rabatowego w trakcie zakupów?")
 sqldf('SELECT count(client_id) FROM ordersClean WHERE couponPercentage > 0')
+
+ordersClean %>% filter(couponPercentage>0) %>% count()
 
 
 print("3)    Ilu klientów zrobiło w analizowanym okresie więcej niż jedno zamówienie?")
@@ -47,12 +56,17 @@ sqldf('SELECT count(*) FROM (SELECT count(client_id), client_id FROM
 #Or you can use this on clean data
 sqldf('SELECT count(*) FROM (SELECT count(client_id) FROM ordersClean GROUP BY client_id HAVING count(client_id) > 1)')
 
+ordersClean %>% group_by(client_id) %>% count(client_id) %>% filter(n>1) %>% nrow()
 
 print("4)    Który z produktów cieszył się największym powodzeniem? Ilu klientów kupiło go ze zniżką?")
-#UNPIVOT is too complex. Let use UNION
-itemsInOrders <-  sqldf('SELECT order_id, item_id_1 as item_id FROM sentOrders 
-                         UNION SELECT order_id, item_id_2 FROM sentOrders WHERE item_id_2 > 0 
-                         UNION SELECT order_id, item_id_3 FROM sentOrders WHERE item_id_3 > 0')
+#UNPIVOT is too complex. Let use UNION ALL. Remember ALL, we need all items in order, not all unique items in order
+itemsInOrders <-  sqldf('SELECT order_id, item_id_1 as item_id FROM sentOrders
+                         UNION ALL SELECT order_id, item_id_2 as item_id FROM sentOrders WHERE item_id_2 > 0 
+                         UNION ALL SELECT order_id, item_id_3 as item_id FROM sentOrders WHERE item_id_3 > 0')
+#or use melt from reshape
+itemsInOrdersR <- melt(sentOrders, id = c("order_id")) %>% filter(!is.na(value)) %>% arrange(order_id)
+names(itemsInOrdersR)[names(itemsInOrdersR) == "value"] <- "item_id"
+itemsInOrdersR <- subset(itemsInOrdersR, select = -c(variable))
 
 sqldf('SELECT mostBought.item_id, timesBought, count(couponPercentage) as boughtWithCoupon FROM 
       (SELECT count(item_id) as timesBought, item_id FROM itemsInOrders
@@ -60,6 +74,10 @@ sqldf('SELECT mostBought.item_id, timesBought, count(couponPercentage) as bought
       ORDER BY timesBought DESC LIMIT 1) as mostBought,
       itemsInOrders, ordersClean
       WHERE mostBought.item_id == itemsInOrders.item_id AND itemsInOrders.order_id == ordersClean.order_id')
+
+itemsInOrdersR %>% group_by(item_id) %>% count(item_id) %>% arrange(desc(n)) %>% head(1) %>% dplyr::rename(bought = n) %>%
+   left_join(itemsInOrdersR, by = c("item_id" = "item_id")) %>% left_join(ordersClean,  by = c("order_id" = "order_id")) %>%
+   filter(couponPercentage > 0) %>% ungroup() %>% count(item_id, bought) %>% dplyr::rename(timesBoughtWithCoupon = n)
 
 
 print("5)    Który produkt był najczęściej kupowany ze zniżką?")
@@ -70,6 +88,8 @@ sqldf('SELECT  count(itemsInOrders.item_id) as boughtWithCoupon, itemsInOrders.i
       ORDER BY boughtWithCoupon DESC LIMIT 1
       ')
 
+ordersClean %>% filter(couponPercentage>0) %>% inner_join(itemsInOrdersR, by = c("order_id" = "order_id")) %>% 
+   count(item_id) %>% dplyr::rename(timesBoughtWithCoupon = n) %>% arrange(desc(timesBoughtWithCoupon)) %>% head(1) 
 
 print("6)    Jaka była końcowa wartość wszystkich zamówień w badanym okresie?")
 #We DONT KNOW value of "SALE" (wyprzedaż) so this is estimate
@@ -78,4 +98,9 @@ sqldf('SELECT  total(basePrice.base_price - (basePrice.base_price * (CAST(IFNULL
       FROM itemsInOrders 
       JOIN ordersClean ON itemsInOrders.order_id == ordersClean.order_id
       JOIN basePrice ON itemsInOrders.item_id == basePrice.item_id')
+
+itemsInOrdersR %>% 
+   inner_join(ordersClean, by = c("order_id" = "order_id")) %>% 
+   inner_join(basePrice, by = c("item_id" = "item_id")) %>% replace(is.na(.), 0) %>%
+   mutate(priceWithCoupon = base_price - ((couponPercentage/100)*base_price)) %>% select(priceWithCoupon) %>% sum()
 
