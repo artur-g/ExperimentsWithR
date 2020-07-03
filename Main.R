@@ -1,23 +1,26 @@
 install.packages("sqldf")
 install.packages("dplyr")
 install.packages("reshape")
+install.packages("caret")
 library(sqldf)
 library(dplyr)
 library(reshape)
+library(caret)
 #Load data
 # Ok, another place where file Encoding can break data import/export made on Linux/Win/Mac
 # BE AWARE, Make standards
 basePrice <- read.csv("Data/cena bazowa.csv", header = TRUE, sep = ";", fileEncoding = "UTF-8-BOM")
-prediction <- read.csv("Data/predykcja.csv", header = TRUE, sep = ";", fileEncoding = "UTF-8-BOM")
+#Lets remove misleading name
+historicalSet <- read.csv("Data/predykcja.csv", header = TRUE, sep = ";", fileEncoding = "UTF-8-BOM")
 
 #This table is problematic Relationship(aggregation) is 1..3, why not 1..55? It should be 1..*
 sentOrders <- read.csv("Data/wyslane.csv", header = TRUE, sep = ";", fileEncoding = "UTF-8-BOM")
 orders <- read.csv("Data/zamowienia.csv", header = TRUE, sep = ";", fileEncoding = "UTF-8-BOM")
 
 #Format data types
-prediction$DATA <- as.Date(prediction$DATA,format="%d.%m.%Y")
-prediction <- prediction[rowSums(is.na(prediction)) != ncol(prediction),]
-prediction$wyprzedaż <- (!is.na(as.integer(prediction$wyprzedaż)) & as.integer(prediction$wyprzedaż) > 0)
+historicalSet$DATA <- as.Date(historicalSet$DATA,format="%d.%m.%Y")
+historicalSet <- historicalSet[rowSums(is.na(historicalSet)) != ncol(historicalSet),]
+historicalSet$wyprzedaż <- (!is.na(as.integer(historicalSet$wyprzedaż)) & as.integer(historicalSet$wyprzedaż) > 0)
 orders$order_date <- as.Date(orders$order_date,format="%d.%m.%Y")
 orders$couponPercentage <- as.integer(gsub("%","",orders$KUPON))
 
@@ -103,4 +106,66 @@ itemsInOrdersR %>%
    inner_join(ordersClean, by = c("order_id" = "order_id")) %>% 
    inner_join(basePrice, by = c("item_id" = "item_id")) %>% replace(is.na(.), 0) %>%
    mutate(priceWithCoupon = base_price - ((couponPercentage/100)*base_price)) %>% select(priceWithCoupon) %>% sum()
+
+#PREDICTIONS
+plot(historicalSet$DATA,historicalSet$zamowienia, type = "o",  col = ifelse(historicalSet$wyprzedaż ,'red','blue'), 
+     xlab = "Date", ylab = "Num of Orders", 
+     main = "Orders in time (red is sale)", pch = 16)
+#Observation: 
+#One observed pattern is that it grows but without any repeating pattern.
+#Another pattern is that long period of sale, had an impact in ONE instance. Not enough samples to draw conclusions.
+#
+#(looks to me, that every model, even linear, will produce data with same probability of success, 
+# only hope is to include in model, long sale periods and predict with only(?) this in mind)
+
+#Addendum: Growth in 'sale' period is identical to growth in the same period of next year. 
+#Difference is the lack of decline after that period in year without sale. 
+#Does 'sale' generated decline? 
+#(most probable cause, IRL events, but there is also sale on the beginning of 2019 that also generated decline so ¯\_(ツ)_/¯ )
+
+#how many missing
+sum(is.na(historicalSet))
+
+#check if data is stationary
+linearTrend <- predict(lm(historicalSet$zamowienia~historicalSet$DATA))
+lines(historicalSet$DATA, linearTrend, col='green')
+
+#Feature selection using rfe in caret
+control <- rfeControl(functions = rfFuncs,
+                      method = "repeatedcv",
+                      repeats = 3,
+                      verbose = FALSE)
+outcomeName<-'zamowienia'
+predictors<-names(historicalSet)[!names(historicalSet) %in% outcomeName]
+salesPredProfile <- rfe(historicalSet[,predictors], historicalSet[,outcomeName],
+                        rfeControl = control)
+#not a big surprise
+salesPredProfile
+
+
+model_gbm<-train(historicalSet[,predictors],historicalSet[,outcomeName],method='gbm')
+model_rf<-train(historicalSet[,predictors],historicalSet[,outcomeName],method='rf')
+model_nnet<-train(historicalSet[,predictors],historicalSet[,outcomeName],method='nnet')
+model_glm<-train(historicalSet[,predictors],historicalSet[,outcomeName],method='glm')
+
+plot(model_gbm)
+plot(model_rf)
+plot(model_nnet)
+plot(model_glm)
+# caret tests
+
+
+
+
+lm1 <- train(annual_pm~., data = air, method = "lm")
+rf1 <- train(annual_pm~., data = air, method = "rf")
+
+testPred <- train(zamowienia~., 
+                 data=historicalSet, 
+                 method = "brnn")
+#Promissing models
+#brnn cubist DENFIS
+caretPred <- caret::predict.train(testPred, historicalSet)
+plot(caretPred)
+plot(testPred)
 
