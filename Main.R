@@ -2,10 +2,14 @@ install.packages("sqldf")
 install.packages("dplyr")
 install.packages("reshape")
 install.packages("caret")
+install.packages("tidyquant")
+install.packages("broom")
 library(sqldf)
 library(dplyr)
 library(reshape)
 library(caret)
+library(tidyquant)
+library(broom)
 #Load data
 # Ok, another place where file Encoding can break data import/export made on Linux/Win/Mac
 # BE AWARE, Make standards
@@ -111,6 +115,7 @@ itemsInOrdersR %>%
 plot(historicalSet$DATA,historicalSet$zamowienia, type = "o",  col = ifelse(historicalSet$wyprzedaż ,'red','blue'), 
      xlab = "Date", ylab = "Num of Orders", 
      main = "Orders in time (red is sale)", pch = 16)
+
 #Observation: 
 #One observed pattern is that it grows but without any repeating pattern.
 #Another pattern is that long period of sale, had an impact in ONE instance. Not enough samples to draw conclusions.
@@ -141,28 +146,117 @@ salesPredProfile <- rfe(historicalSet[,predictors], historicalSet[,outcomeName],
                         rfeControl = control)
 #not a big surprise
 salesPredProfile
+#not a big surprise
 
+#SIMPLEST model there is, no data manip, no transf, lets see what happens
+model_glm <- glm(zamowienia ~ ., data = historicalSet)
+plot(model_glm)
+
+historicalSet %>% ggplot(aes(x = DATA, y = zamowienia, color = wyprzedaż)) +
+   geom_point(alpha = 0.5) +
+   geom_line(alpha = 0.5) +
+   theme_tq()
+
+augment(model_glm) %>%
+   ggplot(aes(x = DATA, y = .resid)) +
+   geom_hline(yintercept = 0, color = "red") +
+   geom_point(alpha = 0.5, color = palette_light()[[1]]) +
+   geom_smooth() +
+   theme_tq()
+
+#Test set generation (no 'sale')
+testSet1 <- data.frame(DATA=as.Date(seq(as.Date("2020-01-01"), as.Date("2020-03-01"), by="days")))
+testSet1['zamowienia']=as.integer()
+testSet1['wyprzedaż']=as.logical(FALSE)
+
+#Test set generation with sale
+testSet2 <- testSet1
+testSet2$wyprzedaż[testSet2$DATA >= as.Date("2020-02-01") & testSet2$DATA <= as.Date("2020-02-07")  ] <- TRUE
+
+#Add predictions (no residuals) for the test data
+#pred_test <- testSet1 %>%
+#   add_predictions(model_glm, "pred_glm") 
+
+#pred_test2 <- testSet2 %>%
+#   add_predictions(model_glm, "pred_glm") 
+
+pred_test <- testSet1
+pred_test2 <- testSet2
+pred_test['pred_glm'] <- predict(model_glm, newdata = testSet1)
+pred_test2['pred_glm'] <- predict(model_glm, newdata = testSet2)
+
+
+pred_test %>%
+   ggplot(aes(x = DATA, y = pred_glm)) +
+   geom_hline(yintercept = 0, color = "red") +
+   geom_point(alpha = 0.5, color = palette_light()[[1]]) +
+   geom_smooth() +
+   theme_tq()
+
+pred_test2 %>%
+   ggplot(aes(x = DATA, y = pred_glm)) +
+   geom_hline(yintercept = 0, color = "red") +
+   geom_point(alpha = 0.5, color = palette_light()[[1]]) +
+   geom_smooth() +
+   theme_tq()
+
+#Ok, Modeling NEEEDS work, I'm not very fluent in that
+#Technically that's all BUT, we can play with different, more advanced models in 'caret' package
 
 model_gbm<-train(historicalSet[,predictors],historicalSet[,outcomeName],method='gbm')
 model_rf<-train(historicalSet[,predictors],historicalSet[,outcomeName],method='rf')
 model_nnet<-train(historicalSet[,predictors],historicalSet[,outcomeName],method='nnet')
 model_glm<-train(historicalSet[,predictors],historicalSet[,outcomeName],method='glm')
 
-plot(model_gbm)
-plot(model_rf)
-plot(model_nnet)
-plot(model_glm)
+model_brnn<-train(historicalSet[,predictors],historicalSet[,outcomeName],method='brnn')
+model_brnn2 <- train(zamowienia~., 
+                  data=historicalSet, 
+                  method = "brnn")
+
+model_cubist<-train(historicalSet[,predictors],historicalSet[,outcomeName],method='cubist')
+model_cubist2 <- train(zamowienia~., 
+                     data=historicalSet, 
+                     method = "cubist")
 # caret tests
 
+pred_test['pred_caret_glm'] <- predict(model_glm, newdata = testSet1)
+pred_test2['pred_caret_glm'] <- predict(model_glm, newdata = testSet2)
+
+pred_test['pred_caret_gbm'] <- predict(model_gbm, newdata = testSet1)
+pred_test2['pred_caret_gbm'] <- predict(model_gbm, newdata = testSet2)
+
+pred_test['pred_caret_rf'] <- predict(model_rf, newdata = testSet1)
+pred_test2['pred_caret_rf'] <- predict(model_rf, newdata = testSet2)
+
+pred_test['pred_caret_nnet'] <- predict(model_nnet, newdata = testSet1)
+pred_test2['pred_caret_nnet'] <- predict(model_nnet, newdata = testSet2)
+
+pred_test['pred_caret_brnn2'] <- predict(model_brnn2, newdata = testSet1)
+pred_test2['pred_caret_brnn2'] <- predict(model_brnn2, newdata = testSet2)
+
+pred_test['pred_caret_cubist2'] <- predict(model_cubist2, newdata = testSet1)
+pred_test2['pred_caret_cubist2'] <- predict(model_cubist2, newdata = testSet2)
 
 
+pred_test %>%
+   ggplot(aes(x = DATA, y = pred_caret_cubist2)) +
+   geom_hline(yintercept = 0, color = "red") +
+   geom_point(alpha = 0.5, color = palette_light()[[1]]) +
+   geom_smooth() +
+   theme_tq()
 
-lm1 <- train(annual_pm~., data = air, method = "lm")
-rf1 <- train(annual_pm~., data = air, method = "rf")
+pred_test2 %>%
+   ggplot(aes(x = DATA, y = pred_caret_cubist2)) +
+   geom_hline(yintercept = 0, color = "red") +
+   geom_point(alpha = 0.5, color = palette_light()[[1]]) +
+   geom_smooth() +
+   theme_tq()
+
+
 
 testPred <- train(zamowienia~., 
-                 data=historicalSet, 
-                 method = "brnn")
+                  data=historicalSet, 
+                  method = "brnn")
 #Promissing models
 #brnn cubist DENFIS
 caretPred <- caret::predict.train(testPred, historicalSet)
